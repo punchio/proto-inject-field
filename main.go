@@ -30,6 +30,9 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if len(result) == 0 {
+			continue
+		}
 		areas[path] = result
 	}
 
