@@ -1,0 +1,15 @@
+syntax = "proto3";
+package example;
+option go_package = "/example";
+
+//@inject_field: custom int32 // this is a custom field, will not be marshalled
+message Example {
+  string name = 1;
+}
+
+// allow to add multi
+//@inject_field: custom int32 `json:"-"`
+//@inject_field: custom2 int32 `json:"extra_field"`
+message Example2 {
+  string name = 1;
+}
