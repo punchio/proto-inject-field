@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -16,86 +15,99 @@ var (
 )
 
 type textArea struct {
-	InsertPos    int
+	Start        int
+	End          int
 	CommentStart int
 	CommentEnd   int
 	InjectField  string
 }
 
-func parseFile(inputPath string) ([]*textArea, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), inputPath, nil, parser.ParseComments)
+func parseFile(inputPath string) (areas []*textArea, err error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, inputPath, nil, parser.ParseComments)
 	if err != nil {
 		return nil, err
 	}
 
-	var areas []*textArea
 	for _, g := range f.Comments {
 		for _, comment := range g.List {
-			tag := parseInjectField(comment.Text)
-			if tag == "" {
+			field := fieldFromComment(comment.Text)
+			if field == "" {
 				continue
 			}
 
 			area := &textArea{
 				CommentStart: int(comment.Pos()),
 				CommentEnd:   int(comment.End()),
-				InjectField:  tag,
+				InjectField:  field,
 			}
 			areas = append(areas, area)
 		}
 	}
 
 	if len(areas) == 0 {
-		return areas, nil
+		return
 	}
 
 	var lastTypePosEnd int
 	for _, decl := range f.Decls {
-		d, ok := decl.(*ast.GenDecl)
+		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok {
 			continue
 		}
-		var s *ast.TypeSpec
-		var st *ast.StructType
-		for _, spec := range d.Specs {
-			s, ok = spec.(*ast.TypeSpec)
-			if !ok {
-				continue
+		var typeSpec *ast.TypeSpec
+		for _, spec := range genDecl.Specs {
+			if ts, tsOK := spec.(*ast.TypeSpec); tsOK {
+				typeSpec = ts
+				break
 			}
-			st, ok = s.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-
-			findField := func(inject string) bool {
-				for _, v := range st.Fields.List {
-					for _, name := range v.Names {
-						if strings.Contains(inject, name.Name) {
-							return true
-						}
-					}
-				}
-				return false
-			}
-
-			insertPos := int(st.Fields.End() - 1)
-			for _, area := range areas {
-				if lastTypePosEnd < area.CommentStart && area.CommentEnd < insertPos {
-					// prevent duplicate inject
-					if findField(area.InjectField) {
-						continue
-					}
-					area.InsertPos = insertPos
-				}
-			}
-			lastTypePosEnd = insertPos
 		}
-	}
 
+		// skip if can't get type spec
+		if typeSpec == nil {
+			continue
+		}
+
+		structDecl, ok := typeSpec.Type.(*ast.StructType)
+		if !ok {
+			continue
+		}
+
+		insertPos := int(structDecl.Fields.End() - 1)
+		endPos := int(typeSpec.End())
+
+		findMember := func(inject string) bool {
+			fieldIndex := strings.Index(inject, " ")
+			fieldName := inject[:fieldIndex]
+			for _, v := range structDecl.Fields.List {
+				for _, name := range v.Names {
+					if fieldName == name.Name {
+						return true
+					}
+				}
+			}
+			return false
+		}
+
+		for _, area := range areas {
+			if lastTypePosEnd < area.CommentStart && area.CommentEnd < insertPos {
+				// prevent duplicate inject
+				if findMember(area.InjectField) {
+					continue
+				}
+				area.Start = insertPos - 1
+				area.End = endPos
+			}
+		}
+		lastTypePosEnd = endPos
+	}
 	areas = slices.DeleteFunc(areas, func(area *textArea) bool {
-		return area.InsertPos == 0
+		return area.Start == 0
 	})
-	return areas, nil
+	//if len(areas) > 0 {
+	//	log.Printf("parsed file %q, number of fields to inject is %d", filepath.Base(inputPath), len(areas))
+	//}
+	return
 }
 
 func writeFile(inputPath string, areas []*textArea) (err error) {
@@ -114,19 +126,20 @@ func writeFile(inputPath string, areas []*textArea) (err error) {
 	return
 }
 
-func parseInjectField(comment string) string {
+func fieldFromComment(comment string) string {
 	match := rComment.FindStringSubmatch(comment)
-	if len(match) != 2 {
-		return ""
+	if len(match) == 2 {
+		return match[1]
 	}
-	return match[1]
+	return ""
 }
 
 func injectField(contents []byte, area *textArea) (injected []byte) {
-	injected = bytes.Clone(contents[:area.InsertPos-1])
-	tail := bytes.Clone(contents[area.InsertPos-1:])
+	injected = contents[:area.Start]
+	old := make([]byte, len(contents)-area.Start)
+	copy(old, contents[area.Start:])
 	wrap := "\t" + area.InjectField + "\n"
 	injected = append(injected, wrap...)
-	injected = append(injected, tail...)
+	injected = append(injected, old...)
 	return
 }

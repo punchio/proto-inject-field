@@ -10,7 +10,7 @@ import (
 
 func main() {
 	var walkDir string
-	flag.StringVar(&walkDir, "dir", ".", "specify directory want to inject custom traversal")
+	flag.StringVar(&walkDir, "input", ".", "specify directory want to inject custom traversal")
 	flag.Parse()
 
 	var files []string
@@ -24,22 +24,24 @@ func main() {
 		return nil
 	})
 
-	areas := make(map[string][]*textArea)
+	var matches []string
 	for _, path := range files {
-		result, err := parseFile(path)
+		areas, err := parseFile(path)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if len(result) == 0 {
+		if len(areas) == 0 {
 			continue
 		}
-		areas[path] = result
-	}
 
-	for path, area := range areas {
-		err := writeFile(path, area)
-		if err != nil {
+		if err = writeFile(path, areas); err != nil {
 			log.Fatal(err)
 		}
+
+		matches = append(matches, path)
+	}
+
+	if len(matches) > 0 {
+		log.Printf("match files:%v", matches)
 	}
 }
